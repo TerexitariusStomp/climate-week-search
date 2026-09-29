@@ -1,0 +1,152 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NYC Climate Week 2026 — transcript search</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--fg:#e6edf3;--mut:#8b949e;
+--acc:#58a6ff;--bdr:#30363d}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);
+color:var(--fg)}
+header{padding:24px 24px 4px;text-align:center}
+h1{font-size:20px;margin:0}
+.sub{color:var(--mut);font-size:12px;margin-top:6px}
+main{max-width:980px;margin:0 auto;padding:0 16px 60px}
+.bar{display:flex;gap:8px;margin:16px 0 8px}
+input[type=text]{flex:1;padding:11px 14px;border-radius:8px;
+border:1px solid var(--bdr);background:var(--card);color:var(--fg);
+font-size:15px;min-width:0}
+input[type=text]:focus{outline:2px solid var(--acc)}
+button{padding:11px 20px;border-radius:8px;border:0;background:var(--acc);
+color:#04121f;font-weight:700;cursor:pointer;font-size:15px}
+button:disabled{opacity:.5;cursor:default}
+.opt{display:flex;gap:18px;color:var(--mut);font-size:13px;
+align-items:center;margin:2px 0 16px;flex-wrap:wrap}
+#status{color:var(--mut);margin:6px 0 10px;font-size:13px}
+.res{display:flex;gap:14px;background:var(--card);
+border:1px solid var(--bdr);border-radius:10px;padding:14px 16px;
+margin-bottom:12px}
+.res img{width:168px;height:94px;object-fit:cover;border-radius:6px;
+flex:none;background:#000}
+.res .body{min-width:0;flex:1}
+.res .top{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
+.score{color:#3fb950;font-variant-numeric:tabular-nums;font-size:13px}
+.time{color:var(--acc);font-variant-numeric:tabular-nums;font-size:13px}
+.spk{color:#d2a8ff;font-size:13px;font-weight:600}
+.ttl{font-weight:600;margin:5px 0 4px;font-size:14px}
+.txt{color:#c9d1d9;font-size:13.5px}
+a{color:var(--acc);text-decoration:none}
+a:hover{text-decoration:underline}
+@media(max-width:640px){.res img{width:120px;height:68px}}
+</style></head><body>
+<header><h1>NYC Climate Week 2026 — ask anything</h1>
+<div class="sub">975 videos · 332,334 transcript cues ·
+5,333 speakers · semantic search runs entirely in your browser</div></header>
+<main>
+<div class="bar">
+<input id="q" type="text" autofocus
+ placeholder="e.g. green steel procurement">
+<input id="sp" type="text" style="max-width:190px"
+ placeholder="speaker (optional)">
+<button id="go" onclick="go()">Search</button></div>
+<div class="opt">
+<label><input id="dd" type="checkbox"> one result per video</label>
+<label>top <select id="k"><option>10</option><option>15</option>
+<option>25</option></select></label>
+<span id="hint" class="sub">first search downloads ~60MB (model + data)</span>
+</div>
+<div id="status"></div><div id="out"></div></main>
+<script type="module">
+import {pipeline, env} from
+ 'https://cdn.jsdelivr.net/npm/@xenova/transformers.js@2.17.0';
+env.allowLocalModels = false;
+
+const esc = s => String(s).replace(/[&<>"]/g,
+ c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = t => {t = Math.floor(t);
+ return String(Math.floor(t/3600)).padStart(2,'0') + ':' +
+  String(Math.floor(t%3600/60)).padStart(2,'0') + ':' +
+  String(t%60).padStart(2,'0');};
+
+let extractor = null, emb = null, scales = null, W = null,
+    VIDS = null, N = 0, DIM = 0, loading = null;
+
+async function ensure() {
+ if (emb) return;
+ if (loading) return loading;
+ loading = (async () => {
+  const st = document.getElementById('status');
+  st.textContent = 'loading embedding model…';
+  extractor = await pipeline('feature-extraction',
+   'Xenova/bge-small-en-v1.5', {quantized: true});
+  st.textContent = 'downloading index data…';
+  const [dj, eb] = await Promise.all([
+   fetch('data.json').then(r => r.json()),
+   fetch('emb.bin').then(r => r.arrayBuffer())]);
+  VIDS = dj.videos; W = dj.w;
+  const dv = new DataView(eb);
+  N = dv.getUint32(0, true); DIM = dv.getUint32(4, true);
+  scales = new Float32Array(eb, 8, N);
+  emb = new Int8Array(eb, 8 + N * 4, N * DIM);
+  st.textContent = 'ready';
+ })();
+ return loading;
+}
+
+async function go() {
+ const q = document.getElementById('q').value.trim();
+ if (!q) return;
+ const btn = document.getElementById('go'); btn.disabled = true;
+ const st = document.getElementById('status');
+ try {
+  await ensure();
+  st.textContent = 'embedding query…';
+  const out = await extractor([q],
+   {pooling: 'mean', normalize: true});
+  const qv = out.data;
+  st.textContent = 'searching ' + N.toLocaleString() + ' windows…';
+  const sc = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+   let d = 0; const o = i * DIM;
+   for (let j = 0; j < DIM; j++) d += qv[j] * emb[o + j];
+   sc[i] = d * scales[i];
+  }
+  const dedupe = document.getElementById('dd').checked;
+  const spf = document.getElementById('sp').value.trim().toLowerCase();
+  const k = +document.getElementById('k').value;
+  const order = Array.from(sc.keys()).sort((a, b) => sc[b] - sc[a]);
+  const seen = new Set(), res = [];
+  for (const i of order) {
+   const [vi, s, e, spk, txt] = W[i];
+   if (spf && !(spk || '').toLowerCase().includes(spf)) continue;
+   const vid = VIDS[vi][0];
+   if (dedupe && seen.has(vid)) continue;
+   seen.add(vid);
+   res.push({score: sc[i], vid, title: VIDS[vi][1],
+    s, spk, txt});
+   if (res.length >= k) break;
+  }
+  st.textContent = res.length + ' result' + (res.length === 1 ? '' : 's');
+  document.getElementById('out').innerHTML = res.map(r => `<div class="res">
+   <a href="https://youtu.be/${r.vid}?t=${Math.floor(r.s)}"
+    target="_blank" rel="noopener">
+   <img src="https://img.youtube.com/vi/${r.vid}/mqdefault.jpg"
+    loading="lazy" alt=""></a>
+   <div class="body">
+   <div class="top"><span class="score">${r.score.toFixed(3)}</span>
+   <span class="time">${fmt(r.s)}</span>
+   <span class="spk">${esc(r.spk || 'unknown')}</span>
+   <a href="https://youtu.be/${r.vid}?t=${Math.floor(r.s)}"
+    target="_blank" rel="noopener">▶ open at ${fmt(r.s)}</a></div>
+   <div class="ttl">${esc(r.title)}</div>
+   <div class="txt">${esc(r.txt)}</div></div></div>`).join('');
+ } catch (e) {
+  st.textContent = 'error: ' + e;
+ } finally { btn.disabled = false; }
+}
+window.go = go;
+document.getElementById('q').addEventListener('keydown',
+ e => {if (e.key === 'Enter') go();});
+document.getElementById('sp').addEventListener('keydown',
+ e => {if (e.key === 'Enter') go();});
+</script></body></html>
