@@ -248,7 +248,7 @@ transcribed · deep links open the exact moment on
 <a href="https://youtube.com" target="_blank" rel="noopener">YouTube</a></footer>
 <script type="module">
 import {pipeline, env} from
- 'https://cdn.jsdelivr.net/npm/@xenova/transformers.js@2.17.0';
+ 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
 env.allowLocalModels = false;
 
 const esc = s => String(s).replace(/[&<>"]/g,
@@ -276,7 +276,14 @@ async function ensure() {
  loading = (async () => {
   setStatus(loadingBar('loading embedding model…'));
   extractor = await pipeline('feature-extraction',
-   'Xenova/bge-small-en-v1.5', {quantized: true});
+   'Xenova/bge-small-en-v1.5', {
+    dtype: 'q8',
+    progress_callback: p => {
+     if (p.status === 'progress' && p.total)
+      setStatus(loadingBar(
+       `downloading model — ${Math.round(p.loaded / 1e6)}MB / ` +
+       `${Math.round(p.total / 1e6)}MB`));
+    }});
   setStatus(loadingBar('downloading transcript index…'));
   const [dj, eb] = await Promise.all([
    fetch('data.json').then(r => r.json()),
